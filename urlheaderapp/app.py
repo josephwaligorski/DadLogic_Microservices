@@ -1,85 +1,79 @@
-import sys
+from flask import Flask, request, jsonify
 import requests
+
+app = Flask(__name__)
 
 
 def fetch_headers(url, method='HEAD'):
-    """
-    Attempt to fetch headers using the specified HTTP method (HEAD or GET).
-    If HEAD is not allowed (401, 403, or 405), fall back to GET (stream=False).
-    """
     try:
         if method == 'HEAD':
             response = requests.head(url, allow_redirects=False)
         else:
-            # Use GET but do not download the body
             response = requests.get(url, allow_redirects=False, stream=True)
         status = response.status_code
         return response, status
     except requests.RequestException as e:
-        print(f"Error during {method} request to {url}: {e}")
         return None, None
 
 
 def get_redirect_location(url):
-    # First attempt: HEAD request
     response, status = fetch_headers(url, method='HEAD')
-    if response is None:
-        sys.exit(1)
-    # If unauthorized or method not allowed, try GET
+    if not response:
+        return None, f"Error fetching initial headers: failed request"
     if status in (401, 403, 405):
-        print(f"HEAD returned status {status}, retrying with GET...")
         response, status = fetch_headers(url, method='GET')
-        if response is None:
-            sys.exit(1)
-    # Check for successful status codes (2xx or 3xx)
+        if not response:
+            return None, f"Error fetching initial headers via GET: failed request"
     if not (200 <= status < 400):
-        print(f"Unexpected status {status} when fetching headers from initial URL.")
-        sys.exit(1)
+        return None, f"Unexpected status {status} for initial URL"
 
-    # Check for 'Location' header
     if 'Location' in response.headers:
         location = response.headers['Location']
-        # Build absolute URL if relative
         if not location.startswith(('http://', 'https://')):
             location = requests.compat.urljoin(url, location)
-        print(f"Redirected URL: {location}")
-        return location
-    else:
-        return None
+        return location, None
+    return None, None
 
 
 def get_content_type(url):
-    # First attempt: HEAD request (allow redirects)
     response, status = fetch_headers(url, method='HEAD')
-    if response is None:
-        sys.exit(1)
-    # If HEAD returns 401/403/405, retry with GET
+    if not response:
+        return None, f"Error fetching headers for {url}: failed request"
     if status in (401, 403, 405):
-        print(f"HEAD returned status {status} for {url}, retrying with GET...")
         response, status = fetch_headers(url, method='GET')
-        if response is None:
-            sys.exit(1)
-    # Check for successful status codes
+        if not response:
+            return None, f"Error fetching headers via GET for {url}: failed request"
     if not (200 <= status < 400):
-        print(f"Unexpected status {status} when fetching Content-Type from {url}.")
-        sys.exit(1)
+        return None, f"Unexpected status {status} for {url}"
 
     content_type = response.headers.get('Content-Type')
     if content_type:
-        print(f"Content-Type: {content_type}")
-    else:
-        print("Content-Type header not found.")
+        return content_type, None
+    return None, "Content-Type header not found"
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/content-type', methods=['GET'])
+def content_type_endpoint():
+    target_url = request.args.get('url')
+    if not target_url:
+        return jsonify({'error': 'Missing `url` query parameter'}), 400
+
+    redirected, err = get_redirect_location(target_url)
+    if err:
+        return jsonify({'error': err}), 502
+
+    final_url = redirected if redirected else target_url
+    content_type, err = get_content_type(final_url)
+    if err:
+        return jsonify({'error': err}), 502
+
+    return jsonify({'url': final_url, 'content_type': content_type})
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        print("Usage: python app.py <url>")
-        sys.exit(1)
-
-    initial_url = sys.argv[1]
-    redirected_url = get_redirect_location(initial_url)
-    if redirected_url:
-        get_content_type(redirected_url)
-    else:
-        print("No redirect found. Fetching Content-Type from initial URL...")
-        get_content_type(initial_url)
+    app.run(host='0.0.0.0', port=8080)
