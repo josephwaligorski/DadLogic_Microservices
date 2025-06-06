@@ -1,0 +1,7 @@
+services:
+  urlheaderapp:
+    build: .
+    image: urlheaderapp:latest
+    container_name: urlheaderapp
+    command: ["https://services.leadconnectorhq.com/documents/download/Yg1TonkaZ07o2ZVgGi68"]
+    # If you need to pass different runtime arguments, you can override `command` when deploying.
